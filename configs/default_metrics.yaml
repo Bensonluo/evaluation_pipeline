@@ -1,0 +1,209 @@
+# RAG Chatbot 评测指标配置
+# 基于 DESIGN.md 第二章评测指标体系定义
+
+# 检索阶段指标 (Retrieval Metrics)
+retrieval:
+  # MRR@5: 平均倒数排名
+  mrr_at_5:
+    enabled: true
+    k: 5
+    description: "平均倒数排名，检索结果相关性"
+    target: 0.75
+    weight: 1.0
+
+  # NDCG@5: 归一化折损累计增益
+  ndcg_at_5:
+    enabled: true
+    k: 5
+    description: "归一化折损累计增益，排序质量"
+    target: 0.70
+    weight: 1.0
+
+  # HitRate@3: Top3 结果包含正确答案的比例
+  hitrate_at_3:
+    enabled: true
+    k: 3
+    description: "Top3 结果包含正确答案的比例"
+    target: 0.85
+    weight: 1.0
+
+  # Precision@5: 精确率
+  precision_at_5:
+    enabled: true
+    k: 5
+    description: "精确率，检索结果中相关文档的比例"
+    target: 0.70
+    weight: 0.8
+
+# 生成阶段指标 (Generation Metrics)
+generation:
+  # ROUGE-L: 最长公共子序列匹配率
+  rouge_l:
+    enabled: true
+    description: "最长公共子序列匹配率，NLP 标准指标"
+    target: 0.40
+    weight: 1.0
+
+  # BLEU-4: 4-gram 精确率的加权组合
+  bleu_4:
+    enabled: true
+    description: "4-gram 精确率的加权组合，机器翻译标配"
+    target: 0.30
+    weight: 0.8
+
+  # BERTScore: 基于 BERT 的语义相似度
+  bertscore:
+    enabled: true
+    description: "基于 BERT 的语义相似度，上下文感知评价"
+    target: 0.85
+    weight: 1.0
+    model_type: "bert-base-multilingual-cased"
+
+# RAGAS 框架指标 (RAGAS Framework Metrics)
+ragas:
+  # Faithfulness: 回答是否忠于检索内容
+  faithfulness:
+    enabled: true
+    description: "回答是否忠于检索内容 (1-5分)，幻觉检测"
+    target: 4.0
+    weight: 1.5
+
+  # Answer Relevance: 回答与问题的相关性
+  answer_relevance:
+    enabled: true
+    description: "回答与问题的相关性 (1-5分)，回答有效性"
+    target: 4.0
+    weight: 1.2
+
+  # Context Relevance: 检索上下文与问题的相关性
+  context_relevance:
+    enabled: true
+    description: "检索上下文与问题的相关性 (1-5分)，检索质量"
+    target: 4.0
+    weight: 1.0
+
+  # Context Precision: 检索上下文中有多少相关块
+  context_precision:
+    enabled: true
+    description: "检索上下文中相关块的比例 (0-1)"
+    target: 0.70
+    weight: 1.0
+
+  # Context Recall: 正确答案是否被检索到
+  context_recall:
+    enabled: true
+    description: "正确答案被检索到的比例 (0-1)"
+    target: 0.80
+    weight: 1.0
+
+  # Answer Correctness: 回答的完整正确性
+  answer_correctness:
+    enabled: true
+    description: "回答的完整正确性 (0-1)"
+    target: 0.85
+    weight: 1.2
+
+# 意图识别指标 (Intent Detection Metrics)
+intent:
+  # Intent Accuracy: 意图分类准确率
+  accuracy:
+    enabled: true
+    description: "意图分类准确率"
+    target: 0.90
+    weight: 1.0
+
+  # Intent F1 Macro: 各意图类别 F1 的平均值
+  f1_macro:
+    enabled: true
+    description: "各意图类别 F1 的平均值（非加权）"
+    target: 0.85
+    weight: 1.0
+
+  # 意图类型定义
+  intent_types:
+    - HOW_TO        # 操作指南类
+    - POLICY        # 政策规则类
+    - PRODUCT       # 产品咨询类
+    - BILLING       # 账单支付类
+    - COMPLAINT     # 投诉建议类
+    - REFUND        # 退款售后类
+    - FEEDBACK      # 反馈评价类
+    - GREETING      # 问候寒暄类
+    - OTHER         # 其他/未知
+
+# 业务指标 (Business Metrics)
+business:
+  # 准确率: 人工标注回答是否正确
+  accuracy:
+    enabled: true
+    description: "人工标注回答是否正确解决用户问题"
+    target: 0.85
+    weight: 1.5
+
+  # 回复率: 能给出有效回答的比例
+  response_rate:
+    enabled: true
+    description: "能给出有效回答的比例（非'不知道'）"
+    target: 0.95
+    weight: 1.0
+
+  # 无幻觉率: Faithfulness >= 3 的比例
+  no_hallucination_rate:
+    enabled: true
+    description: "Faithfulness >= 3 的回答比例，无幻觉率"
+    target: 0.90
+    weight: 1.5
+
+# 延迟指标 (Latency Metrics)
+latency:
+  # P50 Latency: 中位数响应时间
+  p50_ms:
+    enabled: true
+    description: "中位数响应时间，典型用户体验"
+    target: 300
+    weight: 1.0
+
+  # P95 Latency: 95% 分位数响应时间
+  p95_ms:
+    enabled: true
+    description: "95% 分位数响应时间，尾部用户体验"
+    target: 1000
+    weight: 1.2
+
+  # P99 Latency: 99% 分位数响应时间
+  p99_ms:
+    enabled: true
+    description: "99% 分位数响应时间，极端情况监控"
+    target: 3000
+    weight: 1.0
+
+# 统计显著性检验配置 (Statistical Significance Testing)
+significance:
+  enabled: true
+  method: "bootstrap"
+  confidence_level: 0.95
+  n_bootstrap: 1000
+  p_value_threshold: 0.05
+
+# 指标阈值配置 (Metric Thresholds)
+thresholds:
+  # Delta 判断阈值
+  delta:
+    improved_min_delta: 0.01      # delta > 1% 标记为 IMPROVED
+    degraded_threshold: -0.05     # delta < -5% 标记为 DEGRADED
+    pass_min: -0.05               # -5% <= delta <= 0 标记为 PASS
+
+  # 延迟阈值
+  latency:
+    retrieval_p95_max_ms: 200
+    retrieval_p99_max_ms: 500
+    generation_p95_max_ms: 3000
+    generation_p99_max_ms: 10000
+    total_p95_max_ms: 5000
+    total_p99_max_ms: 15000
+
+  # 质量阈值
+  quality:
+    precision_at_5_drop_threshold: 0.05  # Precision@5 下降超过 5% 阻止部署
+    hallucination_rate_max: 0.1          # 幻觉率超过 10% 阻止部署
+    p95_latency_increase_max_ms: 500     # P95 延迟增加超过 500ms 警告

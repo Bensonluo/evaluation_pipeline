@@ -1,0 +1,209 @@
+# RAGAS Prompt 模板配置
+# 基于 DESIGN.md 第 10.3 节定义
+
+# RAGAS Context Precision Prompt
+# 用于评估检索上下文的相关性
+context_precision:
+  prompt_template: |
+    Given a question and a context, evaluate whether the context contains relevant information to answer the question.
+
+    Question: {question}
+    Context: {context}
+
+    Determine the precision of the context (0.0 to 1.0), where 1.0 means all information in the context is relevant to the question.
+
+    Output JSON:
+    {{"precision": float, "reasoning": str}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 200
+
+# RAGAS Context Recall Prompt
+# 用于评估正确答案是否被检索到
+context_recall:
+  prompt_template: |
+    Given a question, the ground truth answer, and the retrieved context, determine what portion of the ground truth answer can be attributed to the context.
+
+    Ground Truth Answer: {ground_truth}
+    Retrieved Context: {context}
+
+    Calculate the recall (0.0 to 1.0) representing how much of the ground truth is supported by the context.
+
+    Output JSON:
+    {{"recall": float, "attributed_statements": [str], "missing_statements": [str]}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 300
+
+# RAGAS Faithfulness Prompt
+# 用于评估回答是否忠实于上下文
+faithfulness:
+  prompt_template: |
+    Given a question, context, and generated answer, evaluate whether the answer is faithful to the context.
+
+    Question: {question}
+    Context: {context}
+    Generated Answer: {answer}
+
+    Evaluate the faithfulness by:
+    1. Breaking down the answer into individual statements
+    2. Verifying each statement against the context
+    3. Calculating the ratio of verified statements to total statements
+
+    Rate on a scale of 1-5, where:
+    - 5: All statements are fully supported by the context
+    - 4: Most statements are supported with minor extrapolations
+    - 3: About half of the statements are supported
+    - 2: Few statements are supported
+    - 1: None or very few statements are supported
+
+    Output JSON:
+    {{"faithfulness": int, "verified_statements": int, "total_statements": int, "reasoning": str}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 300
+
+# RAGAS Answer Relevance Prompt
+# 用于评估回答与问题的相关性
+answer_relevance:
+  prompt_template: |
+    Given a question and the generated answer, evaluate how relevant and complete the answer is to the question.
+
+    Question: {question}
+    Generated Answer: {answer}
+
+    Evaluate on:
+    1. Directness: Does the answer directly address the question?
+    2. Completeness: Does the answer cover all aspects of the question?
+    3. Conciseness: Is the answer appropriately concise without unnecessary information?
+
+    Rate on a scale of 1-5, where:
+    - 5: Direct, complete, and appropriately concise
+    - 4: Mostly relevant with minor omissions
+    - 3: Partially relevant, missing key aspects
+    - 2: Marginally relevant, mostly off-topic
+    - 1: Completely irrelevant
+
+    Output JSON:
+    {{"answer_relevance": int, "directness": int, "completeness": int, "conciseness": int, "reasoning": str}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 300
+
+# RAGAS Answer Correctness Prompt
+# 用于评估回答的正确性
+answer_correctness:
+  prompt_template: |
+    Given a question, ground truth answer, and generated answer, evaluate the correctness of the generated answer.
+
+    Question: {question}
+    Ground Truth: {ground_truth}
+    Generated Answer: {answer}
+
+    Evaluate answer correctness on two dimensions:
+    1. Semantic similarity (0.0 to 1.0): How semantically similar are the answers?
+    2. Factual accuracy (0.0 to 1.0): How factually accurate is the generated answer?
+
+    Combined score: (similarity + accuracy) / 2
+
+    Output JSON:
+    {{"correctness": float, "similarity": float, "accuracy": float, "feedback": str}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 300
+
+# RAGAS Context Entity Recall Prompt
+# 用于评估上下文中召回的实体比例
+context_entity_recall:
+  prompt_template: |
+    Given a question, ground truth answer, and retrieved context, evaluate entity coverage.
+
+    Question: {question}
+    Ground Truth Answer: {ground_truth}
+    Retrieved Context: {context}
+
+    1. Extract key entities from the ground truth answer
+    2. Check which entities appear in the retrieved context
+    3. Calculate the recall ratio
+
+    Output JSON:
+    {{"entity_recall": float, "total_entities": int, "recalled_entities": int, "missing_entities": [str]}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 300
+
+# LLM 辅助标注 Prompt
+# 用于生成检索标注
+llm_annotation:
+  prompt_template: |
+    给定用户问题，识别最相关的知识库文档。
+
+    问题：{query}
+
+    知识库文档：
+    {doc_list}
+
+    要求：
+    1. 选择所有与问题相关的文档 ID
+    2. 考虑语义相关性，不仅仅是关键词匹配
+    3. 返回 JSON 格式：{{"relevant_docs": ["doc_id_1", "doc_id_2"], "reasoning": str}}
+
+    请标注：
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 400
+
+# LLM-as-a-Judge 综合评估 Prompt
+# 用于端到端 RAG 评分
+llm_judge:
+  prompt_template: |
+    Evaluate the following RAG response on a scale of 1-5:
+
+    Question: {question}
+    Context: {context}
+    Response: {response}
+
+    Criteria:
+    - Faithfulness: Does the response stick to the context?
+    - Relevance: Does the response answer the question?
+    - Completeness: Is the response comprehensive?
+
+    Provide a JSON output:
+    {{"score": int, "faithfulness": int, "relevance": int, "completeness": int, "reasoning": str}}
+
+  model: "gpt-4"
+  temperature: 0
+  max_tokens: 300
+
+  # 偏见缓解配置
+  bias_mitigation:
+    - 使用平衡的测试集避免偏向特定风格
+    - 多次评估取平均减少随机性
+    - 定期校准 Judge 提示词
+
+# 自动化评测配置
+automation:
+  # CI/CD 集成
+  ci_trigger:
+    on_pr: true           # PR 时运行快速检查
+    on_merge: true         # 合并时运行完整评测
+    on_schedule: "0 2 * * *"  # 每天凌晨 2 点
+
+  # 自动失败门禁
+  fail_gates:
+    precision_at_5_drop_threshold: 0.05    # Precision@5 下降超过 5% 阻止部署
+    hallucination_rate_max: 0.1            # 幻觉率超过 10% 阻止部署
+    p95_latency_increase_max_ms: 500       # P95 延迟增加超过 500ms 警告
+
+  # 持续监控
+  drift_detection:
+    enabled: true
+    metric_window: "7d"                    # 7 天滚动窗口
+    alert_on_drift: true

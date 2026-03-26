@@ -1,0 +1,8 @@
+psycopg2-binary
+pydantic>=1.10.0,<2.0.0
+rouge-score
+sacrebleu
+scikit-learn
+numpy
+pandas
+pyyaml

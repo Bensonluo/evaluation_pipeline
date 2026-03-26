@@ -1,0 +1,322 @@
+# RAG Chatbot 评测任务配置
+# 主配置文件，控制评测流程和参数
+
+# 评测模式配置 (Evaluation Mode)
+evaluation:
+  # 评测模式: full, retrieval_only, generation_only, intent_only
+  mode: "full"
+  description: "评测模式，决定执行哪些评测任务"
+
+  # 微调目标: embedding, llm, intent, all
+  finetune_target: "all"
+  description: "指定微调的目标组件，用于针对性评测"
+
+  # 对比模式: 是否与基线进行对比
+  comparison_mode: true
+  description: "启用对比模式时，会计算与指定基线的指标差异"
+
+  # 基线名称
+  baseline_name: "v1.0"
+  description: "用于对比的基线版本名称"
+
+# 数据集配置 (Dataset Configuration)
+dataset:
+  # 数据集名称
+  name: "customer_service_qa_v2"
+  description: "客户服务问答数据集"
+
+  # 数据集版本
+  version: "2.0"
+  description: "数据集版本号"
+
+  # 数据集类型: qa, retrieval, intent
+  type: "qa"
+  description: "数据集类型，决定评测方式"
+
+  # 数据源配置
+  source:
+    type: "database"  # database, file
+    connection_string: "postgresql://localhost:5433/rag_chatbot"
+    table_name: "test_datasets"
+    description: "数据源配置，优先使用数据库"
+
+  # 数据文件路径（备用）
+  file_path: "data/test_dataset.jsonl"
+  description: "数据文件路径，当 source 类型为 file 时使用"
+
+  # 数据集统计
+  stats:
+    total_samples: 500
+    intents_covered:
+      - HOW_TO
+      - POLICY
+      - PRODUCT
+      - BILLING
+      - COMPLAINT
+    edge_cases_ratio: 0.15
+    description: "数据集统计信息"
+
+# 检索配置 (Retrieval Configuration)
+retrieval:
+  enabled: true
+
+  # 向量数据库配置
+  vector_db:
+    type: "qdrant"
+    host: "localhost"
+    port: 6333
+    collection_name: "rag_chatbot_kb"
+    api_key: null
+    description: "向量数据库连接配置"
+
+  # Embedding 模型配置
+  embedding:
+    model_name: "sentence-transformers/all-MiniLM-L6-v2"
+    device: "cpu"  # cpu, cuda
+    batch_size: 32
+    description: "Embedding 模型配置"
+
+  # 检索参数
+  search_params:
+    top_k: 5
+    score_threshold: 0.5
+    description: "检索参数配置"
+
+# 生成配置 (Generation Configuration)
+generation:
+  enabled: true
+
+  # Chatbot API 配置
+  api:
+    base_url: "http://localhost:8000"
+    endpoint: "/api/chat"
+    timeout: 30
+    max_retries: 3
+    description: "Chatbot API 连接配置"
+
+  # LLM 配置
+  llm:
+    model_name: "gpt-3.5-turbo"
+    temperature: 0.7
+    max_tokens: 500
+    description: "LLM 生成参数配置"
+
+# 意图识别配置 (Intent Detection Configuration)
+intent:
+  enabled: true
+
+  # 意图分类器配置
+  classifier:
+    model_path: "models/intent_classifier"
+    device: "cpu"
+    description: "意图分类器模型配置"
+
+  # 意图类型
+  intent_types:
+    - HOW_TO
+    - POLICY
+    - PRODUCT
+    - BILLING
+    - COMPLAINT
+    - REFUND
+    - FEEDBACK
+    - GREETING
+    - OTHER
+
+# 数据库配置 (Database Configuration)
+database:
+  host: "postgres"
+  port: 5432
+  database: "rag_chatbot"
+  user: "airflow"
+  password: "airflow"
+  pool_min: 1
+  pool_max: 10
+  command_timeout: 30
+
+# Qdrant 向量数据库配置
+qdrant:
+  host: "localhost"
+  port: 6333
+  collection_name: "documents"
+  api_key: null
+
+# Chatbot API 配置
+chatbot_api:
+  base_url: "http://host.docker.internal:8000"
+  endpoint: "/api/v1/chat"
+  timeout: 30
+  max_retries: 3
+
+# Airflow 配置 (Airflow Configuration)
+airflow:
+  # DAG 配置
+  dag:
+    dag_id: "rag_evaluation"
+    description: "RAG Chatbot 评测流水线"
+    schedule_interval: null  # 手动触发
+    start_date: "2026-01-01"
+    catchup: false
+    max_active_runs: 1
+    tags: ["rag", "evaluation", "chatbot"]
+    description: "Airflow DAG 基本配置"
+
+  # 任务配置
+  tasks:
+    data_preparation:
+      task_id: "data_preparation"
+      retries: 2
+      retry_delay_seconds: 60
+      timeout_seconds: 300
+
+    retrieval_evaluation:
+      task_id: "retrieval_evaluation"
+      retries: 2
+      retry_delay_seconds: 60
+      timeout_seconds: 600
+
+    generation_evaluation:
+      task_id: "generation_evaluation"
+      retries: 2
+      retry_delay_seconds: 60
+      timeout_seconds: 1200
+
+    baseline_comparison:
+      task_id: "baseline_comparison"
+      retries: 1
+      retry_delay_seconds: 30
+      timeout_seconds: 300
+
+    report_generation:
+      task_id: "report_generation"
+      retries: 2
+      retry_delay_seconds: 60
+      timeout_seconds: 300
+
+# 报告配置 (Report Configuration)
+report:
+  # 输出格式
+  formats:
+    - json
+    - html
+    - markdown
+  formats_description: "报告输出格式"
+
+  # 输出路径
+  output_dir: "outputs/reports"
+  description: "报告输出目录"
+
+  # 报告模板
+  template:
+    html_template: "templates/report_template.html"
+    markdown_template: "templates/report_template.md"
+    description: "报告模板路径"
+
+  # 报告内容配置
+  content:
+    include_scorecard: true
+    include_stratified_results: true
+    include_error_analysis: true
+    include_significance_tests: true
+    include_recommendations: true
+    description: "报告内容包含项"
+
+# 告警配置 (Alert Configuration)
+alerts:
+  enabled: true
+
+  # 告警条件
+  conditions:
+    - metric: "delta"
+      operator: "lt"
+      threshold: -0.05
+      level: "WARNING"
+      message: "指标下降超过 5%"
+
+    - metric: "status"
+      operator: "eq"
+      threshold: "DEGRADED"
+      level: "CRITICAL"
+      message: "评测状态为 DEGRADED"
+
+    - metric: "latency_p95_ms"
+      operator: "gt"
+      threshold: 5000
+      level: "WARNING"
+      message: "P95 延迟超过 5 秒"
+
+  # 告警渠道
+  channels:
+    - type: "email"
+      enabled: false
+      recipients: ["admin@example.com"]
+
+    - type: "slack"
+      enabled: false
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+
+    - type: "dingtalk"
+      enabled: false
+      webhook_url: "${DINGTALK_WEBHOOK_URL}"
+
+# 日志配置 (Logging Configuration)
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "json"  # json, text
+  output: "stdout"  # stdout, file
+
+  file:
+    path: "logs/evaluation.log"
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+    description: "日志文件配置"
+
+# 性能配置 (Performance Configuration)
+performance:
+  # 并发配置
+  concurrency:
+    max_workers: 4
+    description: "最大并发工作线程数"
+
+  # 缓存配置
+  cache:
+    enabled: true
+    backend: "memory"  # memory, redis
+    ttl_seconds: 3600
+    description: "缓存配置"
+
+  # 批处理配置
+  batch:
+    enabled: true
+    batch_size: 50
+    description: "批处理配置"
+
+# 调试配置 (Debug Configuration)
+debug:
+  enabled: false
+
+  # 调试输出
+  verbose: true
+  save_intermediate_results: true
+  intermediate_results_dir: "outputs/intermediate"
+
+  # 性能分析
+  profiling:
+    enabled: false
+    output_dir: "outputs/profiling"
+
+# 元数据配置 (Metadata Configuration)
+metadata:
+  project: "RAG Chatbot Evaluation Pipeline"
+  version: "2.0"
+  author: "RAG Team"
+  description: "RAG Chatbot 微调前后评测流水线配置"
+
+# 环境变量覆盖 (Environment Override)
+# 可通过环境变量覆盖配置项
+env_overrides:
+  POSTGRES_PASSWORD: "database.password"
+  SLACK_WEBHOOK_URL: "alerts.channels.slack.webhook_url"
+  DINGTALK_WEBHOOK_URL: "alerts.channels.dingtalk.webhook_url"
+  OPENAI_API_KEY: "generation.api.api_key"
+  QDRANT_API_KEY: "retrieval.vector_db.api_key"

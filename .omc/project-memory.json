@@ -1,0 +1,304 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1774451670783,
+  "projectRoot": "/Users/luopeng/Documents/GitHub/chatbot_test_pipeline/evaluation_pipeline",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml",
+          "requirements.txt"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "pip",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": "snake_case",
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "scripts",
+      "src",
+      "tests"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "airflow": {
+      "path": "airflow",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1774451670768,
+      "keyFiles": []
+    },
+    "config": {
+      "path": "config",
+      "purpose": "Configuration files",
+      "fileCount": 0,
+      "lastAccessed": 1774451670768,
+      "keyFiles": []
+    },
+    "configs": {
+      "path": "configs",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1774451670768,
+      "keyFiles": [
+        "default_metrics.yaml",
+        "evaluation_config.yaml",
+        "ragas_prompts.yaml"
+      ]
+    },
+    "dags": {
+      "path": "dags",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1774451670769,
+      "keyFiles": [
+        "__init__.py",
+        "rag_evaluation_dag.py"
+      ]
+    },
+    "data": {
+      "path": "data",
+      "purpose": "Data files",
+      "fileCount": 2,
+      "lastAccessed": 1774451670769,
+      "keyFiles": [
+        "retrieval_labels.json",
+        "test_dataset.jsonl"
+      ]
+    },
+    "logs": {
+      "path": "logs",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1774451670769,
+      "keyFiles": []
+    },
+    "outputs": {
+      "path": "outputs",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1774451670769,
+      "keyFiles": [
+        "test_generation_report.html",
+        "test_generation_report.json",
+        "test_intent_report.html",
+        "test_intent_report.json",
+        "test_retrieval_report.html"
+      ]
+    },
+    "plugins": {
+      "path": "plugins",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1774451670769,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1774451670769,
+      "keyFiles": [
+        "run_evaluation.py"
+      ]
+    },
+    "sql": {
+      "path": "sql",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774451670770,
+      "keyFiles": [
+        "init_evaluation_db.sql"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 3,
+      "lastAccessed": 1774451670770,
+      "keyFiles": [
+        "__init__.py",
+        "config.py",
+        "database.py"
+      ]
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 2,
+      "lastAccessed": 1774451670770,
+      "keyFiles": [
+        "README.md",
+        "__init__.py"
+      ]
+    },
+    "src/api": {
+      "path": "src/api",
+      "purpose": "API routes",
+      "fileCount": 3,
+      "lastAccessed": 1774451670770,
+      "keyFiles": [
+        "__init__.py",
+        "chatbot.py",
+        "qdrant.py"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "dags/rag_evaluation_dag.py",
+      "accessCount": 30,
+      "lastAccessed": 1774527140238,
+      "type": "file"
+    },
+    {
+      "path": "src/config.py",
+      "accessCount": 9,
+      "lastAccessed": 1774526197004,
+      "type": "file"
+    },
+    {
+      "path": "docker-compose.yml",
+      "accessCount": 7,
+      "lastAccessed": 1774522846170,
+      "type": "file"
+    },
+    {
+      "path": "src/reporting/html_generator.py",
+      "accessCount": 7,
+      "lastAccessed": 1774527131580,
+      "type": "file"
+    },
+    {
+      "path": "configs/evaluation_config.yaml",
+      "accessCount": 5,
+      "lastAccessed": 1774522078319,
+      "type": "file"
+    },
+    {
+      "path": "src/database.py",
+      "accessCount": 4,
+      "lastAccessed": 1774524252948,
+      "type": "file"
+    },
+    {
+      "path": "src/dataset/loader.py",
+      "accessCount": 4,
+      "lastAccessed": 1774524258998,
+      "type": "directory"
+    },
+    {
+      "path": "src",
+      "accessCount": 4,
+      "lastAccessed": 1774525918416,
+      "type": "directory"
+    },
+    {
+      "path": "",
+      "accessCount": 3,
+      "lastAccessed": 1774524979777,
+      "type": "directory"
+    },
+    {
+      "path": "sql/init_evaluation_db.sql",
+      "accessCount": 2,
+      "lastAccessed": 1774524983391,
+      "type": "file"
+    },
+    {
+      "path": "src/evaluation/generation_eval.py",
+      "accessCount": 2,
+      "lastAccessed": 1774525923700,
+      "type": "file"
+    },
+    {
+      "path": "src/api/__init__.py",
+      "accessCount": 2,
+      "lastAccessed": 1774525937294,
+      "type": "file"
+    },
+    {
+      "path": "src/api/qdrant.py",
+      "accessCount": 2,
+      "lastAccessed": 1774526066232,
+      "type": "file"
+    },
+    {
+      "path": "requirements-airflow.txt",
+      "accessCount": 1,
+      "lastAccessed": 1774452383366,
+      "type": "file"
+    },
+    {
+      "path": "src/evaluation/retrieval_eval.py",
+      "accessCount": 1,
+      "lastAccessed": 1774497003624,
+      "type": "file"
+    },
+    {
+      "path": "src/evaluation/intent_eval.py",
+      "accessCount": 1,
+      "lastAccessed": 1774497016709,
+      "type": "file"
+    },
+    {
+      "path": "data/test_dataset.jsonl",
+      "accessCount": 1,
+      "lastAccessed": 1774497016760,
+      "type": "file"
+    },
+    {
+      "path": "data/retrieval_labels.json",
+      "accessCount": 1,
+      "lastAccessed": 1774497016818,
+      "type": "file"
+    },
+    {
+      "path": "evaluation.log",
+      "accessCount": 1,
+      "lastAccessed": 1774518887849,
+      "type": "file"
+    },
+    {
+      "path": "src/api",
+      "accessCount": 1,
+      "lastAccessed": 1774525918364,
+      "type": "directory"
+    },
+    {
+      "path": "src/api/chatbot.py",
+      "accessCount": 1,
+      "lastAccessed": 1774525923593,
+      "type": "file"
+    },
+    {
+      "path": "src/reporting/json_reporter.py",
+      "accessCount": 1,
+      "lastAccessed": 1774526495231,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
