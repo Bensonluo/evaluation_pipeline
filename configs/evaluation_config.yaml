@@ -48,33 +48,46 @@ dataset:
   stats:
     total_samples: 500
     intents_covered:
-      - HOW_TO
-      - POLICY
-      - PRODUCT
-      - BILLING
-      - COMPLAINT
+      # Customer-service intent labels (must match rag_chatbot Intent enum).
+      - refund
+      - return
+      - query_order
+      - track_shipping
+      - complaint
+      - faq
+      - policy
+      - greeting
+      - chitchat
     edge_cases_ratio: 0.15
     description: "数据集统计信息"
 
 # 检索配置 (Retrieval Configuration)
+# 黑盒检索评测：通过 POST /api/v1/chat 拿到的 sources 计算 MRR/NDCG/HitRate。
+# 直连向量库仅作为可选的“纯向量召回离线基线”（deprecated），默认不启用。
 retrieval:
   enabled: true
 
-  # 向量数据库配置
+  # 黑盒检索：复用 chatbot_api，按 sources 评分
+  blackbox:
+    enabled: true
+    description: "通过 chatbot 返回的 sources 评测检索（默认开启）"
+
+  # 向量数据库配置 (DEPRECATED — 仅作纯向量召回离线基线，默认 enabled=false)
   vector_db:
+    enabled: false
     type: "qdrant"
     host: "localhost"
     port: 6333
-    collection_name: "rag_chatbot_kb"
+    collection_name: "documents"
     api_key: null
-    description: "向量数据库连接配置"
+    description: "直连向量库基线（可选；不参与黑盒评测主流程）"
 
-  # Embedding 模型配置
+  # Embedding 模型配置（仅直连基线启用时需要，须与 rag_chatbot 一致：BGE-M3）
   embedding:
-    model_name: "sentence-transformers/all-MiniLM-L6-v2"
+    model_name: "BAAI/bge-m3"
     device: "cpu"  # cpu, cuda
     batch_size: 32
-    description: "Embedding 模型配置"
+    description: "Embedding 模型配置（须与线上 BGE-M3 一致）"
 
   # 检索参数
   search_params:
@@ -86,42 +99,59 @@ retrieval:
 generation:
   enabled: true
 
-  # Chatbot API 配置
+  # Chatbot API 配置（黑盒，所有评测经此出口）
   api:
     base_url: "http://localhost:8000"
-    endpoint: "/api/chat"
-    timeout: 30
+    endpoint: "/api/v1/chat"
+    timeout: 60
     max_retries: 3
-    description: "Chatbot API 连接配置"
+    rate_limit_rpm: 9  # 留在服务端 ~10 req/min/IP 限流之下
+    description: "Chatbot API 连接配置（黑盒）"
 
-  # LLM 配置
+  # LLM-as-a-Judge 配置（默认复用 GLM OpenAI 兼容网关）
+  llm_judge:
+    provider: "glm"           # glm | openai
+    model: "glm-5.2"
+    temperature: 0.0
+    max_tokens: 500
+    base_url: "${GLM_BASE_URL}"
+    api_key: "${GLM_API_KEY}"
+    description: "LLM-as-a-Judge 配置（RAGAS 维度评分）"
+
+  # 生成模型配置（仅作记录用；实际模型由黑盒决定）
   llm:
-    model_name: "gpt-3.5-turbo"
+    model_name: "glm-5.2"
     temperature: 0.7
     max_tokens: 500
-    description: "LLM 生成参数配置"
+    description: "被测系统生成模型（记录用，黑盒下不可调）"
 
 # 意图识别配置 (Intent Detection Configuration)
 intent:
   enabled: true
 
-  # 意图分类器配置
+  # 意图分类器配置（黑盒下意图由 /api/v1/chat 返回，此处仅作记录）
   classifier:
-    model_path: "models/intent_classifier"
-    device: "cpu"
-    description: "意图分类器模型配置"
+    source: "blackbox_response"  # 意图取自 chatbot 响应的 intent 字段
+    description: "意图来源（黑盒响应）"
 
-  # 意图类型
+  # 意图类型 — 必须与 rag_chatbot 的 Intent 枚举一致（全小写）
   intent_types:
-    - HOW_TO
-    - POLICY
-    - PRODUCT
-    - BILLING
-    - COMPLAINT
-    - REFUND
-    - FEEDBACK
-    - GREETING
-    - OTHER
+    - refund
+    - return
+    - query_order
+    - track_shipping
+    - complaint
+    - faq
+    - policy
+    - greeting
+    - chitchat
+    - confirm
+    - deny
+    - cancel
+    - unknown
+    - relationship_query
+    - global_summary
+    - entity_lookup
 
 # 数据库配置 (Database Configuration)
 database:
@@ -134,19 +164,14 @@ database:
   pool_max: 10
   command_timeout: 30
 
-# Qdrant 向量数据库配置
-qdrant:
-  host: "localhost"
-  port: 6333
-  collection_name: "documents"
-  api_key: null
-
-# Chatbot API 配置
+# Chatbot API 配置（黑盒主出口）
 chatbot_api:
   base_url: "http://host.docker.internal:8000"
-  endpoint: "/api/v1/chat"
-  timeout: 30
+  chat_path: "/api/v1/chat"
+  timeout_s: 60
+  rate_limit_rpm: 9  # 留在服务端 ~10 req/min/IP 限流之下
   max_retries: 3
+  api_key: null  # 匿名访问；如启用鉴权再填
 
 # Airflow 配置 (Airflow Configuration)
 airflow:
@@ -171,15 +196,26 @@ airflow:
 
     retrieval_evaluation:
       task_id: "retrieval_evaluation"
-      retries: 2
-      retry_delay_seconds: 60
-      timeout_seconds: 600
+      retries: 3
+      retry_delay_seconds: 180
+      # At ~9 req/min, N samples take ~N/9 min just for chatbot calls.
+      # Default sized for ~50 samples; raise for larger datasets.
+      timeout_seconds: 1800
 
     generation_evaluation:
       task_id: "generation_evaluation"
-      retries: 2
-      retry_delay_seconds: 60
-      timeout_seconds: 1200
+      retries: 3
+      retry_delay_seconds: 180
+      # Slower than retrieval: chatbot call + LLM judge per sample.
+      timeout_seconds: 3600
+
+    dialogue_evaluation:
+      task_id: "dialogue_evaluation"
+      retries: 3
+      retry_delay_seconds: 180
+      # Multi-turn: each case = N sequential chatbot turns under rate limit.
+      # Default sized for ~10 cases × ~3 turns.
+      timeout_seconds: 1800
 
     baseline_comparison:
       task_id: "baseline_comparison"

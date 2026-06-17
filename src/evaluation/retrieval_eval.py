@@ -1,15 +1,22 @@
 """
-Retrieval evaluation module.
+Retrieval evaluation module (black-box).
 
-Computes standard retrieval metrics:
+Computes standard retrieval metrics against the documents the chatbot actually
+returns (`sources` from POST /api/v1/chat), not a private vector-search probe:
 - MRR (Mean Reciprocal Rank)
 - NDCG (Normalized Discounted Cumulative Gain)
 - Hit Rate
 - Precision@K
+
+The black-box approach measures the real retrieval path the user sees (hybrid
+search + rerank + optional GraphRAG fusion), which a direct Qdrant probe cannot
+reproduce. Use `evaluate_via_api()` to call the chatbot and collect sources,
+then compute metrics; `evaluate()` handles the pure-metric step when sources
+are already in the dataset (e.g. cached runs).
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Set
+from typing import Any, Dict, List, Set
 import numpy as np
 
 
@@ -21,6 +28,9 @@ class RetrievalResult:
     hitrate_at_3: float
     precision_at_5: float
     per_query_results: List[Dict[str, Any]] = field(default_factory=list)
+    # Number of queries where the API returned no sources (non-RAG intents or
+    # errors). Useful for diagnosing intent-misroute issues.
+    empty_source_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -29,6 +39,7 @@ class RetrievalResult:
             "hitrate_at_3": self.hitrate_at_3,
             "precision_at_5": self.precision_at_5,
             "per_query_results": self.per_query_results,
+            "empty_source_count": self.empty_source_count,
         }
 
 
@@ -36,12 +47,12 @@ class RetrievalEvaluator:
     """Evaluates retrieval quality using standard IR metrics."""
 
     def __init__(self, config: Dict[str, Any], qdrant_client=None):
-        """
-        Initialize retrieval evaluator.
+        """Initialize retrieval evaluator.
 
         Args:
-            config: Evaluation configuration including k values for metrics
-            qdrant_client: Optional Qdrant client for vector operations
+            config: Evaluation configuration including k values for metrics.
+            qdrant_client: Deprecated. Kept only for backward compatibility;
+                the black-box path does not use it. Pass None.
         """
         self.config = config
         self.qdrant_client = qdrant_client
@@ -49,6 +60,56 @@ class RetrievalEvaluator:
         self.k_ndcg = config.get("ndcg_k", 5)
         self.k_hitrate = config.get("hitrate_k", 3)
         self.k_precision = config.get("precision_k", 5)
+
+    async def evaluate_via_api(
+        self,
+        dataset: List[Dict[str, Any]],
+        chatbot_client,
+    ) -> RetrievalResult:
+        """Call the chatbot for each query, then score its `sources`.
+
+        This is the black-box retrieval evaluation. For each sample we POST the
+        query to /api/v1/chat and treat the returned `sources` as the ranked
+        retrieved-doc list, scored against `relevant_docs`.
+
+        Args:
+            dataset: Samples with at least `query` and `relevant_docs`
+                (list of doc-id strings). `session_id` optional; a fresh thread
+                is allocated per query to avoid memory bleed.
+            chatbot_client: A ChatbotClient instance (see src/api/chatbot.py).
+
+        Returns:
+            RetrievalResult over the chatbot's real retrieval output.
+        """
+        queries = [item.get("query", "") for item in dataset]
+        session_ids = [
+            item.get("session_id") or chatbot_client.allocate_session_id()
+            for item in dataset
+        ]
+
+        batch = await chatbot_client.batch_generate(
+            messages=queries,
+            session_ids=session_ids,
+        )
+
+        # Attach the chatbot's sources back onto each item, then run metrics.
+        enriched: List[Dict[str, Any]] = []
+        empty_source_count = 0
+        for item, resp in zip(dataset, batch.responses):
+            sources = list(resp.sources) if resp.status == "success" else []
+            if not sources:
+                empty_source_count += 1
+            enriched.append({
+                **item,
+                "retrieved_ids": sources,
+                "_intent": resp.intent,
+                "_error": resp.error,
+                "_latency_ms": resp.latency_ms,
+            })
+
+        result = await self.evaluate(enriched)
+        result.empty_source_count = empty_source_count
+        return result
 
     async def evaluate(self, dataset: List[Dict[str, Any]]) -> RetrievalResult:
         """
@@ -71,7 +132,13 @@ class RetrievalEvaluator:
 
         for item in dataset:
             retrieved_ids = item.get("retrieved_ids", [])
-            relevant_ids = set(item.get("relevant_ids", []))
+            # Accept both `relevant_ids` (legacy) and `relevant_docs`
+            # (the key the dataset loader / retrieval_labels.json emit).
+            relevant_ids = set(
+                item.get("relevant_ids")
+                or item.get("relevant_docs")
+                or []
+            )
             query = item.get("query", "")
 
             # Compute metrics for this query

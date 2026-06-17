@@ -96,26 +96,31 @@ class QdrantConfig:
 
 @dataclass(frozen=True)
 class LatencyThresholds:
-    """Latency threshold configuration."""
+    """Latency threshold configuration.
 
-    retrieval_p95_max_ms: int = 200
-    retrieval_p99_max_ms: int = 500
-    generation_p95_max_ms: int = 3000
-    generation_p99_max_ms: int = 10000
-    total_p95_max_ms: int = 5000
-    total_p99_max_ms: int = 15000
+    Defaults reflect a customer-service RAG stack (hybrid retrieval + rerank +
+    optional GraphRAG + LangGraph dialogue) measured end-to-end over the public
+    /api/v1/chat endpoint, which is slower than a bare vector probe.
+    """
+
+    retrieval_p95_max_ms: int = 2000
+    retrieval_p99_max_ms: int = 4000
+    generation_p95_max_ms: int = 10000
+    generation_p99_max_ms: int = 20000
+    total_p95_max_ms: int = 12000
+    total_p99_max_ms: int = 25000
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> LatencyThresholds:
         if data is None:
             return cls()
         return cls(
-            retrieval_p95_max_ms=data.get("retrieval", {}).get("p95_max_ms", 200),
-            retrieval_p99_max_ms=data.get("retrieval", {}).get("p99_max_ms", 500),
-            generation_p95_max_ms=data.get("generation", {}).get("p95_max_ms", 3000),
-            generation_p99_max_ms=data.get("generation", {}).get("p99_max_ms", 10000),
-            total_p95_max_ms=data.get("total", {}).get("p95_max_ms", 5000),
-            total_p99_max_ms=data.get("total", {}).get("p99_max_ms", 15000),
+            retrieval_p95_max_ms=data.get("retrieval", {}).get("p95_max_ms", 2000),
+            retrieval_p99_max_ms=data.get("retrieval", {}).get("p99_max_ms", 4000),
+            generation_p95_max_ms=data.get("generation", {}).get("p95_max_ms", 10000),
+            generation_p99_max_ms=data.get("generation", {}).get("p99_max_ms", 20000),
+            total_p95_max_ms=data.get("total", {}).get("p95_max_ms", 12000),
+            total_p99_max_ms=data.get("total", {}).get("p99_max_ms", 25000),
         )
 
 
@@ -153,38 +158,61 @@ class MetricThresholds:
 
 @dataclass(frozen=True)
 class LLMJudgeConfig:
-    """LLM-as-a-Judge configuration."""
+    """LLM-as-a-Judge configuration.
 
-    model: str = "gpt-4"
+    Defaults to GLM (the chatbot's own provider) via its OpenAI-compatible
+    endpoint. Set provider="openai" to use OpenAI instead.
+    """
+
+    model: str = "glm-5.2"
     temperature: float = 0.0
     max_tokens: int = 500
+    provider: str = "glm"
+    base_url: str | None = None
     api_key: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> LLMJudgeConfig:
         if data is None:
-            return cls()
+            data = {}
+        provider = data.get("provider", "glm")
+        if provider == "glm":
+            default_key = os.getenv("GLM_API_KEY")
+            default_url = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+        else:
+            default_key = os.getenv("OPENAI_API_KEY")
+            default_url = None
         return cls(
-            model=data.get("model", "gpt-4"),
+            model=data.get("model", os.getenv("JUDGE_MODEL", "glm-5.2")),
             temperature=data.get("temperature", 0.0),
             max_tokens=data.get("max_tokens", 500),
-            api_key=data.get("api_key") or os.getenv("OPENAI_API_KEY"),
+            provider=provider,
+            base_url=data.get("base_url", default_url),
+            api_key=data.get("api_key") or default_key,
         )
 
 
 @dataclass(frozen=True)
 class ChatbotAPIConfig:
-    """Chatbot API configuration for generation evaluation."""
+    """Chatbot API configuration for black-box evaluation.
+
+    The chat endpoint is POST /api/v1/chat. Auth is optional (anonymous demo
+    mode); rate_limit_rpm keeps the client under the server's ~10 req/min/IP.
+    """
 
     base_url: str
-    timeout_ms: int = 10000
+    chat_path: str = "/api/v1/chat"
+    timeout_s: float = 60.0
+    rate_limit_rpm: int = 9
     api_key: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChatbotAPIConfig:
         return cls(
             base_url=data["base_url"],
-            timeout_ms=data.get("timeout_ms", 10000),
+            chat_path=data.get("chat_path", data.get("endpoint", "/api/v1/chat")),
+            timeout_s=data.get("timeout_s", data.get("timeout", 60.0)),
+            rate_limit_rpm=data.get("rate_limit_rpm", 9),
             api_key=data.get("api_key"),
         )
 

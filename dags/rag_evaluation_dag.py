@@ -53,6 +53,7 @@ from src.database import DatabaseManager
 from src.evaluation.retrieval_eval import RetrievalEvaluator, RetrievalResult
 from src.evaluation.generation_eval import GenerationEvaluator, GenerationResult
 from src.evaluation.intent_eval import IntentEvaluator, IntentResult
+from src.evaluation.dialogue_eval import DialogueEvaluator, DialogueCase, DialogueResult
 from src.reporting.json_reporter import JSONReporter
 from src.reporting.html_generator import HTMLGenerator
 from src.reporting.delta_reporter import DeltaReporter
@@ -69,8 +70,10 @@ DEFAULT_ARGS = {
     "start_date": datetime(2026, 1, 1),
     "email_on_failure": False,
     "email_on_retry": False,
-    "retries": 2,
-    "retry_delay": timedelta(minutes=5),
+    # The chatbox is rate-limited to ~10 req/min/IP; transient 429s and slow
+    # end-to-end turns justify more retries with longer backoff.
+    "retries": 3,
+    "retry_delay": timedelta(minutes=3),
     "catchup": False,
     "max_active_runs": 1,
 }
@@ -152,7 +155,11 @@ def prepare_data(**context) -> dict[str, Any]:
 
 
 def evaluate_retrieval(**context) -> dict[str, Any]:
-    """Evaluate retrieval quality using MRR, NDCG, HitRate, Precision.
+    """Evaluate retrieval quality (black-box) using MRR, NDCG, HitRate, Precision.
+
+    For each query we POST to /api/v1/chat and score the returned `sources`
+    against the dataset's `relevant_docs`. We do NOT connect to Qdrant — that
+    would bypass rerank/GraphRAG and not reflect what users see.
 
     Pushes retrieval_metrics to XCom.
 
@@ -178,12 +185,7 @@ def evaluate_retrieval(**context) -> dict[str, Any]:
     dataset = db.get_test_dataset(dataset_id=dataset_id)
     test_data = dataset.get("data", [])
 
-    # Initialize retrieval evaluator
-    from src.api.qdrant import QdrantClient
-    qdrant_client = QdrantClient(
-        base_url=config.qdrant.base_url,
-        collection_name=config.qdrant.collection_name,
-    )
+    from src.api.chatbot import ChatbotClient
 
     evaluator = RetrievalEvaluator(
         config={
@@ -192,11 +194,19 @@ def evaluate_retrieval(**context) -> dict[str, Any]:
             "hitrate_k": 3,
             "precision_k": 5,
         },
-        qdrant_client=qdrant_client,
     )
 
-    # Run evaluation (async function)
-    result: RetrievalResult = asyncio.run(evaluator.evaluate(test_data))
+    async def _run() -> RetrievalResult:
+        async with ChatbotClient(
+            base_url=config.chatbot_api.base_url,
+            timeout=config.chatbot_api.timeout_s,
+            chat_path=config.chatbot_api.chat_path,
+            rate_limit_rpm=config.chatbot_api.rate_limit_rpm,
+            api_key=config.chatbot_api.api_key,
+        ) as client:
+            return await evaluator.evaluate_via_api(test_data, client)
+
+    result: RetrievalResult = asyncio.run(_run())
 
     # Convert to dict format for storage
     metrics = {
@@ -204,6 +214,7 @@ def evaluate_retrieval(**context) -> dict[str, Any]:
         "ndcg_at_5": result.ndcg_at_5,
         "hitrate_at_3": result.hitrate_at_3,
         "precision_at_5": result.precision_at_5,
+        "empty_source_count": result.empty_source_count,
         "per_query_results": result.per_query_results,
     }
 
@@ -216,7 +227,10 @@ def evaluate_retrieval(**context) -> dict[str, Any]:
 
 
 def evaluate_generation(**context) -> dict[str, Any]:
-    """Evaluate generation quality using ROUGE, BLEU, BERTScore.
+    """Evaluate generation quality (black-box) with LLM-as-a-judge.
+
+    Fetches responses from /api/v1/chat, then grades them with an
+    OpenAI-compatible judge (GLM by default) on relevance/fluency/completeness/safety.
 
     Pushes generation_metrics to XCom.
 
@@ -242,21 +256,37 @@ def evaluate_generation(**context) -> dict[str, Any]:
     dataset = db.get_test_dataset(dataset_id=dataset_id)
     test_data = dataset.get("data", [])
 
-    # Initialize generation evaluator
-    evaluator = GenerationEvaluator(
-        config={
-            "api_base_url": config.chatbot_api.base_url,
-            "timeout_ms": config.chatbot_api.timeout_ms,
-            "llm_judge": {
-                "model": config.llm_judge.model,
-                "temperature": config.llm_judge.temperature,
-                "api_key": config.llm_judge.api_key,
-            },
-        }
+    # Build the judge client (None if unconfigured → heuristic fallback).
+    from src.metrics.ragas import make_judge_client
+    from src.api.chatbot import ChatbotClient
+
+    judge_client = make_judge_client(
+        model=config.llm_judge.model,
+        provider=config.llm_judge.provider,
+        api_key=config.llm_judge.api_key,
+        base_url=config.llm_judge.base_url,
     )
 
-    # Run evaluation (async function)
-    result: GenerationResult = asyncio.run(evaluator.evaluate(test_data))
+    evaluator = GenerationEvaluator(
+        config={
+            "judge_model": config.llm_judge.model,
+            "enable_safety_check": True,
+        },
+        llm_judge_client=judge_client,
+    )
+
+    async def _run() -> GenerationResult:
+        async with ChatbotClient(
+            base_url=config.chatbot_api.base_url,
+            timeout=config.chatbot_api.timeout_s,
+            chat_path=config.chatbot_api.chat_path,
+            rate_limit_rpm=config.chatbot_api.rate_limit_rpm,
+            api_key=config.chatbot_api.api_key,
+        ) as client:
+            evaluator.chatbot_client = client
+            return await evaluator.evaluate_via_api(test_data)
+
+    result: GenerationResult = asyncio.run(_run())
 
     # Convert to dict format for storage
     metrics = {
@@ -273,6 +303,86 @@ def evaluate_generation(**context) -> dict[str, Any]:
 
     db.close()
 
+    return metrics
+
+
+def evaluate_dialogue(**context) -> dict[str, Any]:
+    """Evaluate multi-turn dialogue quality (black-box).
+
+    Runs each conversation case through /api/v1/chat reusing one session_id
+    per case (the server's in-memory thread), then scores slot filling,
+    clarification turns, intent accuracy, intent switching, and task completion.
+
+    Pushes dialogue_metrics to XCom.
+
+    Args:
+        **context: Airflow context.
+
+    Returns:
+        dict: Dialogue evaluation results.
+    """
+    dag_run = context.get("dag_run")
+    conf = dag_run.conf if dag_run else {}
+    ti = context["task_instance"]
+
+    # Dialogue cases are stored separately from the single-turn QA dataset.
+    # They live in data/dialogue_dataset.jsonl and are loaded as generic rows.
+    config_path = os.getenv("EVAL_CONFIG_PATH", "configs/evaluation_config.yaml")
+    config = load_config(config_path)
+
+    # Allow callers to override the dialogue dataset file via DAG conf.
+    dialogue_file = conf.get(
+        "dialogue_file",
+        str(Path(__file__).parent.parent / "data" / "dialogue_dataset.jsonl"),
+    )
+
+    # Dialogue cases use a turns/message schema, not the QA query/intent/
+    # ground_truth schema, so load them as raw JSONL rows (no QA validation).
+    from src.dataset.converter import FormatConverter
+
+    raw_cases = FormatConverter._jsonl_file_to_internal(dialogue_file)
+    cases = [DialogueCase.from_dict(c) for c in raw_cases]
+
+    from src.api.chatbot import ChatbotClient
+
+    evaluator = DialogueEvaluator()
+
+    async def _run() -> DialogueResult:
+        async with ChatbotClient(
+            base_url=config.chatbot_api.base_url,
+            timeout=config.chatbot_api.timeout_s,
+            chat_path=config.chatbot_api.chat_path,
+            rate_limit_rpm=config.chatbot_api.rate_limit_rpm,
+            api_key=config.chatbot_api.api_key,
+        ) as client:
+            return await evaluator.evaluate_via_api(cases, client)
+
+    result: DialogueResult = asyncio.run(_run())
+
+    # Strip heavy per-case detail from the XCom summary; keep aggregates + ids.
+    metrics = {
+        "slot_precision": result.slot_precision,
+        "slot_recall": result.slot_recall,
+        "slot_f1": result.slot_f1,
+        "avg_clarification_turns": result.avg_clarification_turns,
+        "intent_accuracy": result.intent_accuracy,
+        "intent_switch_accuracy": result.intent_switch_accuracy,
+        "task_completion_rate": result.task_completion_rate,
+        "case_count": result.case_count,
+        "per_case_summary": [
+            {
+                "case_id": c["case_id"],
+                "turn_count": c["turn_count"],
+                "slot_f1": c["slot_f1"],
+                "clarification_turns": c["clarification_turns"],
+                "intent_accuracy": c["intent_accuracy"],
+                "task_complete": c["task_complete"],
+            }
+            for c in result.per_case_results
+        ],
+    }
+
+    ti.xcom_push(key="dialogue_metrics", value=metrics)
     return metrics
 
 
@@ -397,6 +507,7 @@ def generate_report(**context) -> dict[str, Any]:
     dataset_info = ti.xcom_pull(task_ids="data_preparation")
     retrieval_metrics = ti.xcom_pull(task_ids="retrieval_evaluation", key="retrieval_metrics")
     generation_metrics = ti.xcom_pull(task_ids="generation_evaluation", key="generation_metrics")
+    dialogue_metrics = ti.xcom_pull(task_ids="dialogue_evaluation", key="dialogue_metrics")
     delta_result = ti.xcom_pull(task_ids="baseline_comparison")
 
     # Determine baseline info
@@ -420,6 +531,7 @@ def generate_report(**context) -> dict[str, Any]:
         "finetune_target": conf.get("finetune_target"),
         "retrieval_metrics": retrieval_metrics,
         "generation_metrics": generation_metrics,
+        "dialogue_metrics": dialogue_metrics,
         "comparison_mode": comparison_mode,
         "delta_metrics": delta_metrics,
         "status": status,
@@ -443,9 +555,10 @@ def generate_report(**context) -> dict[str, Any]:
     output_dir = Path("outputs/reports")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Extract top-level metrics only (no per-query lists)
+    # Extract top-level metrics only (no per-query/per-case lists)
     retrieval_summary = {k: v for k, v in (retrieval_metrics or {}).items() if k != "per_query_results"}
     generation_summary = {k: v for k, v in (generation_metrics or {}).items() if k != "per_response_results"}
+    dialogue_summary = {k: v for k, v in (dialogue_metrics or {}).items() if k != "per_case_summary"}
 
     json_path = output_dir / f"{eval_name}.json"
     reporter = JSONReporter(eval_name=eval_name, dataset_info={"dataset_id": dataset_info.get("dataset_id")})
@@ -527,6 +640,12 @@ def create_dag(
         dag=dag,
     )
 
+    dialogue_eval_task = PythonOperator(
+        task_id="dialogue_evaluation",
+        python_callable=evaluate_dialogue,
+        dag=dag,
+    )
+
     baseline_compare_task = PythonOperator(
         task_id="baseline_comparison",
         python_callable=compare_baseline,
@@ -540,14 +659,13 @@ def create_dag(
     )
 
     # Define task dependencies
-    # data_preparation → retrieval_evaluation
-    # data_preparation → generation_evaluation
-    # retrieval_evaluation → baseline_comparison
-    # generation_evaluation → baseline_comparison
+    # data_preparation fans out to the three evaluation tasks; all three must
+    # finish before baseline comparison and the final report.
+    # data_preparation → {retrieval, generation, dialogue}_evaluation
+    # {retrieval, generation, dialogue}_evaluation → baseline_comparison
     # baseline_comparison → report_generation
-    # (baseline_comparison can be skipped, so report_generation uses ONE_SUCCESS)
-    data_prep_task >> [retrieval_eval_task, generation_eval_task]
-    [retrieval_eval_task, generation_eval_task] >> baseline_compare_task
+    data_prep_task >> [retrieval_eval_task, generation_eval_task, dialogue_eval_task]
+    [retrieval_eval_task, generation_eval_task, dialogue_eval_task] >> baseline_compare_task
     baseline_compare_task >> report_gen_task
 
     return dag

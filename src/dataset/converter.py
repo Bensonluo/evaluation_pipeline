@@ -27,17 +27,29 @@ class FormatConverter:
     - RAGAS format <-> Internal
     """
 
-    # Intent types from DESIGN.md Section 12.2
+    # Intent types — must match rag_chatbot's Intent enum (lowercase values).
     INTENT_TYPES = [
-        "HOW_TO",
-        "POLICY",
-        "PRODUCT",
-        "BILLING",
-        "COMPLAINT",
-        "REFUND",
-        "FEEDBACK",
-        "GREETING",
-        "OTHER",
+        # Task-oriented
+        "refund",
+        "return",
+        "query_order",
+        "track_shipping",
+        "complaint",
+        # Knowledge (RAG)
+        "faq",
+        "policy",
+        # Dialogue
+        "chitchat",
+        "greeting",
+        # Meta
+        "confirm",
+        "deny",
+        "cancel",
+        "unknown",
+        # Graph (legacy)
+        "relationship_query",
+        "global_summary",
+        "entity_lookup",
     ]
 
     @classmethod
@@ -201,7 +213,7 @@ class FormatConverter:
                 "ground_truth": item.get("ground_truth", ""),
                 "contexts": item.get("contexts", []),
                 "generated_answer": item.get("answer", ""),
-                "intent": item.get("intent", "OTHER"),
+                "intent": cls.normalize_intent(item.get("intent", "unknown")),
                 "metadata": item.get("metadata", {}),
             })
 
@@ -261,16 +273,16 @@ class FormatConverter:
 
     @classmethod
     def validate_intent(cls, intent: str) -> bool:
-        """Check if intent is valid."""
-        return intent in cls.INTENT_TYPES
+        """Check if intent is valid (case-insensitive against the enum values)."""
+        return intent is not None and intent.lower() in cls.INTENT_TYPES
 
     @classmethod
     def normalize_intent(cls, intent: str) -> str:
-        """Normalize intent to uppercase valid value."""
-        intent_upper = intent.upper()
-        if cls.validate_intent(intent_upper):
-            return intent_upper
-        return "OTHER"
+        """Normalize intent to the lowercase enum value; fall back to 'unknown'."""
+        if intent is None:
+            return "unknown"
+        lowered = intent.lower()
+        return lowered if lowered in cls.INTENT_TYPES else "unknown"
 
     @classmethod
     def convert_retrieval_labels_to_qa(
@@ -304,7 +316,7 @@ class FormatConverter:
                 "query": query,
                 "ground_truth": " ".join(contexts),
                 "relevant_docs": relevant_docs,
-                "intent": label.get("intent", "OTHER"),
+                "intent": cls.normalize_intent(label.get("intent", "unknown")),
                 "metadata": label.get("metadata", {}),
             })
 

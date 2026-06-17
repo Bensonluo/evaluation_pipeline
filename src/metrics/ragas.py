@@ -557,3 +557,93 @@ def compute_ragas_metrics(
             metrics["answer_correctness"] = 0.0
 
     return metrics
+
+
+class LLMJudgeClient:
+    """OpenAI-compatible LLM judge client with an .invoke(prompt) interface.
+
+    Wraps an OpenAI-style chat-completions client (works with GLM's OpenAI-
+    compatible endpoint, OpenAI itself, or any compatible gateway) so it can be
+    passed directly to the RAGAS functions above, which call
+    `llm_client.invoke(prompt)`.
+
+    The underlying client is constructed lazily from environment variables:
+        JUDGE_PROVIDER : "glm" (default) or "openai"
+        GLM_API_KEY    : API key for the GLM endpoint
+        GLM_BASE_URL   : e.g. https://open.bigmodel.cn/api/paas/v4
+        OPENAI_API_KEY : used when JUDGE_PROVIDER=openai
+        JUDGE_MODEL    : model name (default glm-5.2)
+    """
+
+    def __init__(self, model: str = "glm-5.2", base_url: Optional[str] = None,
+                 api_key: Optional[str] = None, provider: str = "glm"):
+        import os
+
+        self.model = model or os.getenv("JUDGE_MODEL", "glm-5.2")
+        self.provider = (provider or os.getenv("JUDGE_PROVIDER", "glm")).lower()
+        if api_key is None:
+            api_key = os.getenv("GLM_API_KEY") if self.provider == "glm" else os.getenv("OPENAI_API_KEY")
+        if base_url is None and self.provider == "glm":
+            base_url = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+        self.api_key = api_key
+        self.base_url = base_url
+        self._client = None  # lazy
+
+    def _get_client(self):
+        """Lazily build the underlying OpenAI-compatible client."""
+        if self._client is None:
+            from openai import OpenAI
+
+            kwargs = {"api_key": self.api_key}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            self._client = OpenAI(**kwargs)
+        return self._client
+
+    def invoke(self, prompt: str) -> str:
+        """Run a single judge prompt and return the raw text response.
+
+        This is the shape RAGAS functions in this module call. Temperature is 0
+        for deterministic grading.
+        """
+        client = self._get_client()
+        completion = client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        return completion.choices[0].message.content or ""
+
+
+def make_judge_client(
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> Optional[LLMJudgeClient]:
+    """Build an LLM-as-a-judge client, or return None if unconfigured.
+
+    Returns None (so callers can fall back to heuristics) when no API key is
+    available for the selected provider.
+
+    Example:
+        >>> judge = make_judge_client()
+        >>> compute_ragas_metrics(questions, contexts, answers, ground_truths, judge)
+    """
+    import os
+
+    provider = (provider or os.getenv("JUDGE_PROVIDER", "glm")).lower()
+    key = api_key or (os.getenv("GLM_API_KEY") if provider == "glm" else os.getenv("OPENAI_API_KEY"))
+    if not key:
+        warnings.warn(
+            f"No API key for judge provider '{provider}'. "
+            "Set GLM_API_KEY (default) or OPENAI_API_KEY. Returning None; "
+            "RAGAS metrics will use placeholder scores."
+        )
+        return None
+    return LLMJudgeClient(
+        model=model or os.getenv("JUDGE_MODEL", "glm-5.2"),
+        base_url=base_url,
+        api_key=key,
+        provider=provider,
+    )
