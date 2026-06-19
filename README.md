@@ -1,48 +1,240 @@
-# RAG Chatbot 端到端评测流水线
+<div align="center">
 
-## 设计概述
+# RAG Evaluation Pipeline
 
-本评测流水线用于评估 **RAG Chatbot(智能客服)** 的质量。它把 chatbot 当作**黑盒**——唯一访问入口是公开的 `POST /api/v1/chat`,不直连 Qdrant、不查 DB、不调内部服务。这样测到的是用户真实看到的效果(混合检索 + rerank + 可选 GraphRAG + LangGraph 对话引擎的端到端表现),而不是某个孤立组件。
+**An automated, black-box evaluation pipeline for RAG systems — covering retrieval, generation, intent, and multi-turn dialogue quality. Built on Apache Airflow with statistical significance testing.**
 
-> 约束:**本流水线只读 chatbot,不修改 chatbot 的任何代码。** rag_chatbot 作为被测系统独立运行。
+[![GitHub stars](https://img.shields.io/github/stars/Bensonluo/evaluation_pipeline?style=for-the-badge)](https://github.com/Bensonluo/evaluation_pipeline/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+[![Companion Project](https://img.shields.io/badge/Companion-rag__chatbot-blueviolet?style=for-the-badge)](https://github.com/Bensonluo/rag_chatbot)
 
-### 评测维度
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Apache Airflow](https://img.shields.io/badge/Airflow-2.8+-017CEE?logo=apache-airflow&logoColor=white)](https://airflow.apache.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-| 维度 | 指标 | 说明 |
-|------|------|------|
-| **检索质量** | MRR@5, NDCG@5, HitRate@3, Precision@5 | 对 chatbot 返回的 `sources` 评分(黑盒,不直连向量库) |
-| **生成质量** | LLM-as-a-Judge(relevance/fluency/completeness/safety) + ROUGE/BLEU | judge 默认走 GLM OpenAI 兼容网关 |
-| **意图识别** | Intent Accuracy, Intent F1 (Macro) | 意图取自 chatbot 响应的 `intent` 字段 |
-| **多轮对话** | 槽位 Precision/Recall/F1、平均澄清轮数、意图切换准确率、任务完成率 | 经 `converse()` 跑多轮(同 session_id),覆盖 LangGraph 的槽位填充/状态栈 |
-| **延迟指标** | P50/P95/P99 Latency | 阈值按客服 RAG 真实场景校准(端到端,非裸向量检索) |
-| **微调效果** | Delta Metrics + 统计显著性检验 | 微调前后指标变化 |
+<!-- 🎬 录制说明:录 Airflow DAG 触发 → 各 task 执行 → 最终 HTML 报告生成 -->
+<img src="docs/assets/demo.gif" alt="Evaluation Pipeline Demo" width="80%">
 
-### 黑盒契约(被测系统接口)
+*🎬 Replace this with a 30s GIF of the pipeline run — see [Recording Guide](#-demo-recording-guide) below*
 
-流水线通过 `POST /api/v1/chat` 与 chatbot 交互:
+</div>
+
+---
+
+## 📌 Table of Contents
+
+- [Why This Project](#-why-this-project)
+- [Key Highlights](#-key-highlights)
+- [Black-Box Philosophy](#-black-box-philosophy)
+- [Evaluation Dimensions](#-evaluation-dimensions)
+- [Quick Start](#-quick-start)
+- [Fine-tune Comparison](#-fine-tune-comparison)
+- [Pipeline Architecture](#-pipeline-architecture)
+- [中文说明](#-中文说明)
+
+---
+
+## 💡 Why This Project
+
+RAG evaluation is the silent killer of LLM projects. Most teams ship a chatbot, get positive vibes in demos, then discover in production that:
+
+- ❌ Retrieval misses the right docs 30% of the time — but no one measured it
+- ❌ Switching embedding models "felt better" — but was it actually better?
+- ❌ Multi-turn dialogue breaks after intent switches — undetected
+- ❌ There's no baseline, so improvements can't be proven
+
+This project solves all of them:
+
+> 🎯 **A black-box evaluation pipeline that treats your RAG system as an opaque endpoint** — measuring retrieval quality, generation quality, intent accuracy, and multi-turn dialogue robustness. With before/after comparison and statistical significance testing.
+
+It's the **missing half** of any serious RAG project. Pairs perfectly with [rag_chatbot](https://github.com/Bensonluo/rag_chatbot).
+
+---
+
+## ✨ Key Highlights
+
+<div align="center">
+
+| 📊 Retrieval | ✍️ Generation | 🎯 Intent |
+|:---:|:---:|:---:|
+| MRR@5, NDCG@5 | ROUGE, BLEU | Intent Accuracy |
+| HitRate@3, Precision@5 | LLM-as-a-Judge | Intent F1 (Macro) |
+| Black-box `sources` scoring | Relevance/fluency/safety | Per-turn accuracy |
+
+| 💬 Multi-turn Dialogue | 📈 Comparison | 📋 Output |
+|:---:|:---:|:---:|
+| Slot Precision/Recall/F1 | Delta Metrics | HTML reports |
+| Avg clarification turns | Bootstrap confidence | JSON exports |
+| Intent switch accuracy | p-value significance | Executive summary |
+
+| 📈 Stats | | |
+|:---:|:---:|:---:|
+| **6** evaluation dimensions | **8+** metrics | **26** unit tests |
+| **Black-box** by design | **Airflow** orchestrated | **Stat-sig** tested |
+
+</div>
+
+### 🧠 What makes it different
+
+1. **Black-box by design** — only talks to the public `/api/v1/chat` endpoint, never touches vector DBs or internal services. Measures what users actually experience.
+2. **Multi-turn dialogue evaluation** — PARADISE / MultiWOZ-style metrics specifically designed for LangGraph dialogue engines (slot filling, intent switch, task completion)
+3. **Fine-tune comparison mode** — load baseline, run new evaluation, compute deltas with Bootstrap confidence intervals and p-values
+4. **LLM-as-a-Judge** — uses GLM (or OpenAI) to grade response quality on relevance, fluency, completeness, safety
+5. **Airflow-orchestrated** — scheduled daily/weekly or triggered on-demand for A/B experiments
+
+---
+
+## 📦 Black-Box Philosophy
+
+The pipeline treats the RAG system as an **opaque endpoint**:
 
 ```
-请求: {"message": str, "session_id": int (>0), "user_id"?: int, "max_tokens"?: int}
-响应: {
-  "content": str,                         # 回答文本(检索/生成评测的主输入)
-  "session_id": int,
-  "intent": str,                          # 意图(意图评测的输入)
-  "sources": [str]|null,                  # 检索到的文档 id 列表(检索评测的输入)
-  "metadata": {
-    "filled_slots": {...},                # 已填槽位(多轮槽位评测的输入)
-    "pending_slots": [...],               # 待填槽位(澄清轮数评测的输入)
-    "confidence": float
-  },
-  "dialogue_state": {"phase", "pending_slots", "filled_slots"}
+┌──────────────────────┐         ┌──────────────────────┐
+│                      │  POST   │                      │
+│  Evaluation Pipeline │ ──────> │   RAG Chatbot        │
+│                      │  /chat  │   (black box)        │
+│  - measures          │ <────── │                      │
+│  - compares          │  JSON   │  - retrieval         │
+│  - reports           │         │  - generation        │
+└──────────────────────┘         │  - dialogue engine   │
+                                 └──────────────────────┘
+```
+
+**Why black-box?**
+- ✅ Measures **end-to-end** user experience (hybrid retrieval + rerank + GraphRAG + dialogue)
+- ✅ **Zero coupling** — works with any RAG system exposing a chat endpoint
+- ✅ Won't break when the chatbot's internals change
+- ✅ Easy to point at staging vs production for environment comparison
+
+### Black-box contract
+
+```http
+POST /api/v1/chat
+Content-Type: application/json
+
+{
+  "message": "我要退款",
+  "session_id": 12345
 }
 ```
 
-关键黑盒行为(已内置于客户端):
-- **匿名访问**:不带 `Authorization` 头即可(服务端回退到 user_id=0);不要带坏 token(会 401),也不要调 `POST /sessions`(匿名会 500)。`session_id` 是任意正整数,无需预先创建。
-- **session_id = 对话线程**:服务端按 `thread_id=session_id` 做进程内记忆。复用同一 id 即多轮连续;每条独立样本用不同 id 避免记忆串扰。
-- **限流**:服务端约 10 req/min/IP。客户端默认节流到 9 rpm 留余量,见 `ChatbotClient.DEFAULT_RATE_LIMIT_RPM`。
+```json
+{
+  "content": "请提供您的订单号...",
+  "intent": "refund",
+  "sources": ["doc_refund_policy_001"],
+  "metadata": {
+    "filled_slots": {"order_id": "..."},
+    "pending_slots": ["reason"]
+  }
+}
+```
 
-### Pipeline 架构
+The pipeline reads `content`, `sources`, `intent`, and slot metadata — nothing else.
+
+---
+
+## 📐 Evaluation Dimensions
+
+| Dimension | Metrics | What it tells you |
+|-----------|---------|-------------------|
+| **Retrieval** | MRR@5, NDCG@5, HitRate@3, Precision@5 | Are we surfacing the right docs? |
+| **Generation** | LLM-as-a-Judge + ROUGE/BLEU | Is the answer good? |
+| **Intent** | Accuracy, F1 (Macro) | Does intent classification work? |
+| **Multi-turn** | Slot F1, avg clarification turns, intent switch accuracy, task completion | Does the dialogue engine hold up? |
+| **Latency** | P50 / P95 / P99 | Is it fast enough for production? |
+| **Fine-tune effect** | Delta Metrics + p-value | Did the fine-tune actually help? |
+
+---
+
+## 🚀 Quick Start
+
+### Option 1: Full setup
+
+```bash
+git clone https://github.com/Bensonluo/evaluation_pipeline.git
+cd evaluation_pipeline
+
+pip install -r requirements.txt
+
+# Configure
+export AIRFLOW_HOME=/path/to/airflow
+
+# Point at your RAG chatbot (anonymous access supported)
+export CHATBOT_API_URL=http://localhost:8000
+export CHATBOT_RATE_LIMIT_RPM=9          # Stay under server's ~10 rpm limit
+
+# LLM-as-a-Judge (GLM recommended)
+export JUDGE_PROVIDER=glm
+export JUDGE_MODEL=glm-5.2
+export GLM_API_KEY=your-glm-key
+export GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+```
+
+### Option 2: Run without Airflow
+
+```bash
+python scripts/run_evaluation.py --mode full
+```
+
+### Option 3: Trigger via Airflow
+
+```bash
+# Start Airflow
+airflow webserver -p 8080 &
+airflow scheduler &
+
+# Trigger full evaluation
+airflow dags trigger rag_evaluation --conf '{"mode": "full"}'
+```
+
+---
+
+## 🔬 Fine-tune Comparison
+
+The killer feature for ML teams: prove that fine-tune actually helped.
+
+### How it works
+
+1. **Load baseline** — read historical results from `evaluation_baselines` table
+2. **Run current evaluation** — execute full pipeline on new model/config
+3. **Compute deltas** — relative + absolute change per metric
+4. **Statistical significance** — Bootstrap confidence intervals + p-values
+5. **Generate report** — percentage change + significance verdict
+
+### Sample Delta Report
+
+```
+| Metric              | Baseline | Current | Delta  | p-value | Status                |
+|---------------------|----------|---------|--------|---------|-----------------------|
+| MRR@5               | 0.723    | 0.789   | +9.1%  | 0.023   | ✅ SIGNIFICANT_IMPROVED |
+| NDCG@5              | 0.681    | 0.712   | +4.5%  | 0.045   | ✅ MARGINAL_IMPROVED   |
+| Slot F1 (dialogue)  | 0.820    | 0.871   | +6.2%  | 0.018   | ✅ IMPROVED            |
+| Judge Relevance     | 0.452    | 0.438   | -3.1%  | 0.120   | ➖ NOT_SIGNIFICANT     |
+```
+
+### Evaluation Modes
+
+| Mode | Scope | Use case |
+|------|-------|----------|
+| `full` | All dimensions | Comprehensive evaluation |
+| `retrieval_only` | Retrieval metrics | After embedding fine-tune |
+| `generation_only` | Generation metrics | After LLM fine-tune |
+| `intent_only` | Intent metrics | After intent classifier fine-tune |
+
+```bash
+# Compare against baseline v1.0
+airflow dags trigger rag_evaluation --conf '{
+  "mode": "full",
+  "baseline_name": "v1.0",
+  "comparison_mode": true
+}'
+```
+
+---
+
+## 🏗️ Pipeline Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -53,254 +245,200 @@
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. data_preparation                                                        │
-│     - 加载测试数据集 (Q&A、检索标注、多轮对话)                              │
-│     - 数据验证和格式转换                                                     │
+│     Load test datasets (Q&A, retrieval labels, multi-turn dialogue cases)  │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                     ┌───────────────┼───────────────┐
                     ▼               ▼               ▼
 ┌──────────────────────┐ ┌─────────────────────┐ ┌─────────────────────────┐
 │ 2. retrieval_eval    │ │ 3. generation_eval  │ │ 4. dialogue_eval        │
-│  打 /api/v1/chat     │ │  打 /api/v1/chat    │ │  打 /api/v1/chat 多轮   │
-│  对 sources 评分     │ │  LLM-as-a-Judge     │ │  槽位/澄清/意图切换     │
-│  MRR/NDCG/HitRate    │ │  ROUGE/BLEU         │ │  任务完成率             │
+│  calls /api/v1/chat  │ │  calls /api/v1/chat │ │  calls /api/v1/chat xN  │
+│  scores `sources`    │ │  LLM-as-a-Judge     │ │  slots / switch / done  │
+│  MRR/NDCG/HitRate    │ │  ROUGE/BLEU         │ │  task completion rate   │
 └──────────────────────┘ └─────────────────────┘ └─────────────────────────┘
                     └───────────────┼───────────────┘
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  5. baseline_comparison  (微调对比模式才执行)                               │
-│     - Delta Metrics (微调后 vs 微调前) + 统计显著性检验                      │
+│  5. baseline_comparison  (only in comparison mode)                          │
+│     Delta Metrics (current vs baseline) + statistical significance test     │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  6. report_generation                                                        │
-│     - 生成 HTML/JSON 报告,包含检索/生成/对话三类指标                        │
+│     HTML/JSON reports with retrieval / generation / dialogue metrics        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 文件结构
+### Multi-turn Dialogue Evaluation Methodology
+
+Based on PARADISE / MultiWOZ paradigms, designed for LangGraph dialogue engines:
+
+| Metric | Definition | LangGraph Node |
+|--------|------------|----------------|
+| Slot Precision/Recall/F1 | final `filled_slots` vs `required_slots` | `collect_slots` |
+| Avg clarification turns | turns to fill all required slots (lower is better) | `collect_slots` → `generate_response` |
+| Per-turn intent accuracy | detected intent vs labeled intent | `detect_intent` |
+| Intent switch accuracy | switch turn follows new task? | `handle_switch` + state stack |
+| Task completion rate | all required slots filled by final turn | end-to-end |
+
+---
+
+## 📁 Project Structure
 
 ```
 evaluation_pipeline/
-├── src/                              # 核心源码
-│   ├── config.py                     # 配置管理(黑盒 endpoint / GLM judge / 节流)
-│   ├── database.py                   # PostgreSQL 连接
-│   ├── metrics/                      # 指标计算
-│   │   ├── retrieval.py              # 检索指标 (MRR, NDCG, HitRate)
-│   │   ├── generation.py             # 生成指标 (ROUGE, BLEU)
-│   │   ├── ragas.py                  # RAGAS 评估 + LLMJudgeClient(GLM)
-│   │   └── statistics.py             # 统计分析 (Bootstrap, p-value)
-│   ├── dataset/                      # 数据集管理
-│   │   ├── loader.py                 # 数据加载
-│   │   ├── sampler.py                # 分层采样
-│   │   └── converter.py              # 格式转换 + 意图归一化
-│   ├── api/                          # 黑盒 API 客户端
-│   │   └── chatbot.py                # /api/v1/chat 客户端(session/节流/多轮)
-│   ├── evaluation/                   # 评测执行
-│   │   ├── retrieval_eval.py         # 检索评测(黑盒 sources)
-│   │   ├── generation_eval.py        # 生成评测(LLM-as-a-Judge)
-│   │   ├── dialogue_eval.py          # 多轮对话评测(槽位/意图切换/完成率)
-│   │   ├── intent_eval.py            # 意图评测
-│   │   └── error_analyzer.py         # 错误分析
-│   └── reporting/                    # 报告生成
-│       ├── delta_reporter.py         # Delta 变化报告
-│       ├── html_generator.py         # HTML 报告
-│       └── json_reporter.py          # JSON 报告
-├── dags/                             # Airflow DAG
-│   └── rag_evaluation_dag.py         # 含 dialogue_evaluation 任务
-├── configs/                          # 配置文件
+├── src/
+│   ├── config.py             # Black-box endpoint / judge / throttling config
+│   ├── database.py           # PostgreSQL connection
+│   ├── metrics/
+│   │   ├── retrieval.py      # MRR, NDCG, HitRate
+│   │   ├── generation.py     # ROUGE, BLEU
+│   │   ├── ragas.py          # RAGAS + LLMJudgeClient (GLM)
+│   │   └── statistics.py     # Bootstrap, p-value
+│   ├── dataset/              # Loader, sampler, converter
+│   ├── api/
+│   │   └── chatbot.py        # Black-box /api/v1/chat client (session/throttle)
+│   ├── evaluation/           # Retrieval / generation / dialogue / intent / error
+│   └── reporting/            # Delta, HTML, JSON reporters
+├── dags/
+│   └── rag_evaluation_dag.py # Airflow DAG
+├── configs/
 │   ├── default_metrics.yaml
-│   ├── ragas_prompts.yaml            # RAGAS Prompt 模板
-│   └── evaluation_config.yaml        # 黑盒 endpoint / 意图枚举 / judge / 节流 / 阈值
-├── data/                             # 测试数据集(.gitignore,本地 fixture)
-│   ├── test_dataset.jsonl            # 单轮 Q&A
-│   ├── retrieval_labels.json         # 检索标注
-│   └── dialogue_dataset.jsonl        # 多轮对话 case
-├── sql/                              # 数据库
+│   ├── ragas_prompts.yaml
+│   └── evaluation_config.yaml  # endpoint / intents / judge / thresholds
+├── data/                     # Test datasets (gitignored local fixtures)
+├── sql/
 │   └── init_evaluation_db.sql
 ├── scripts/
-│   └── run_evaluation.py             # 独立运行脚本
-└── tests/
-    ├── unit/
-    │   ├── test_blackbox_eval.py     # 黑盒客户端/检索/judge/意图 单测
-    │   └── test_dialogue_eval.py     # 多轮对话评测单测
-    └── integration/
+│   └── run_evaluation.py     # Standalone runner (no Airflow needed)
+└── tests/                    # 26 unit tests, no network required
 ```
 
-## 快速开始
+---
 
-### 1. 安装依赖
+## 🧪 Testing
 
 ```bash
+pytest tests/unit/test_blackbox_eval.py tests/unit/test_dialogue_eval.py -q
+```
+
+Covers: black-box contract parsing, session/throttling, retrieval scoring, judge fallback, intent normalization, multi-turn slot/clarification/intent-switch/completion. **26 unit tests, no network required.**
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Black-box evaluation (retrieval / generation / intent / dialogue)
+- [x] LLM-as-a-Judge (GLM / OpenAI)
+- [x] Multi-turn dialogue evaluation (slots / intent switch / completion)
+- [x] Fine-tune comparison with statistical significance
+- [x] Airflow orchestration + standalone runner
+- [x] 26 unit tests
+- [ ] RAGAS integration for faithfulness / answer relevancy
+- [ ] Automated regression alerts (Slack / webhook)
+- [ ] Visual dashboard for metric trends over time
+
+---
+
+## 🤝 Companion Project
+
+This pipeline is designed to evaluate [**rag_chatbot**](https://github.com/Bensonluo/rag_chatbot) — a LangGraph-based enterprise customer service chatbot. Together they form a complete develop → evaluate → iterate loop:
+
+```
+rag_chatbot  ──(improvements)──>  evaluation_pipeline
+     ▲                                    │
+     └──────────(feedback)────────────────┘
+```
+
+---
+
+## 🤝 Contributing
+
+PRs welcome — especially:
+- 📊 New evaluation metrics (faithfulness, answer relevancy)
+- 🌍 New dataset formats or domains
+- 📈 Visualization improvements for reports
+- 🐛 Bug fixes with a failing test
+
+---
+
+## 📜 License
+
+[MIT](LICENSE) — free for personal and commercial use.
+
+If this project helped you ship a better RAG system, please ⭐ star the repo.
+
+---
+
+## 📬 Contact
+
+- 💼 **Portfolio**: [benluo.art](https://benluo.art)
+- 🐙 **GitHub**: [@Bensonluo](https://github.com/Bensonluo)
+- 💬 **Issues**: [GitHub Issues](https://github.com/Bensonluo/evaluation_pipeline/issues)
+
+---
+
+## 🇨🇳 中文说明
+
+**RAG 端到端评测流水线** — 基于 Airflow 的黑盒评测系统。
+
+### 核心亮点
+
+- **黑盒设计**:只通过 `POST /api/v1/chat` 访问被测系统,测真实用户体验
+- **六大评测维度**:检索质量(MRR/NDCG/HitRate)、生成质量(ROUGE/BLEU/LLM-Judge)、意图识别、多轮对话、延迟、微调效果
+- **多轮对话评测**:基于 PARADISE/MultiWOZ 范式,专门为 LangGraph 对话引擎设计
+  - 槽位 Precision/Recall/F1
+  - 平均澄清轮数
+  - 意图切换准确率
+  - 任务完成率
+- **微调对比模式**:Delta Metrics + Bootstrap 置信区间 + p-value 统计显著性检验
+- **LLM-as-a-Judge**:默认走 GLM OpenAI 兼容网关
+- **Airflow 编排**:支持 daily/weekly 调度 + 手动触发
+- **26 个单测**:无需网络,覆盖黑盒契约/检索评分/多轮评测
+
+### 快速开始
+
+```bash
+git clone https://github.com/Bensonluo/evaluation_pipeline.git
 cd evaluation_pipeline
 pip install -r requirements.txt
-```
 
-### 2. 配置环境
-
-复制 `.env.example` 为 `.env` 并填写。匿名访问可不填 chatbot key:
-
-```bash
-export AIRFLOW_HOME=/path/to/airflow
-
-# 被测 chatbot(黑盒,匿名访问可不填 key)
+# 配置被测系统(支持匿名访问)
 export CHATBOT_API_URL=http://localhost:8000
-export CHATBOT_API_KEY=                      # 可空;启用鉴权再填
-export CHATBOT_RATE_LIMIT_RPM=9              # 留在服务端 ~10 req/min/IP 之下
+export CHATBOT_RATE_LIMIT_RPM=9
 
-# LLM-as-a-Judge(默认 GLM OpenAI 兼容网关;也可 JUDGE_PROVIDER=openai)
+# 配置 Judge
 export JUDGE_PROVIDER=glm
-export JUDGE_MODEL=glm-5.2
 export GLM_API_KEY=your-glm-key
-export GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+
+# 运行
+python scripts/run_evaluation.py --mode full
 ```
 
-### 3. 启动被测 chatbot 与 Airflow
+### 配套项目
 
-```bash
-# 先启动 rag_chatbot(被测系统,默认监听 8000)
-airflow webserver -p 8080 &
-airflow scheduler &
-```
+本流水线专为评测 [rag_chatbot](https://github.com/Bensonluo/rag_chatbot) 设计,两者共同构成「开发 → 评测 → 迭代」闭环。
 
-### 4. 手动触发评测
+---
 
-```bash
-airflow dags trigger rag_evaluation
-```
+<details>
+<summary>🎬 Demo Recording Guide (for maintainers)</summary>
 
-## 微调效果评测
+### How to record the hero GIF
 
-### 评测模式
+1. **Tool**: [Kap](https://getkap.co/) (Mac) or [licecap](https://www.cockos.com/licecap/)
+2. **Content** (~30s):
+   - 0-5s: Open Airflow UI, show the `rag_evaluation` DAG
+   - 5-15s: Trigger DAG with `{"mode": "full"}`, show tasks lighting up green
+   - 15-25s: Open the generated HTML report, scroll through metric tables
+   - 25-30s: Highlight a Delta comparison table (baseline vs current with p-values)
+3. **Save to**: `docs/assets/demo.gif` (keep under 5MB)
 
-| 模式 | 评测范围 | 使用场景 |
-|------|----------|----------|
-| `full` | 检索+生成+意图+对话+业务 | 全面评测 |
-| `retrieval_only` | 仅检索指标 | Embedding 微调后 |
-| `generation_only` | 仅生成指标 | LLM 微调后 |
-| `intent_only` | 仅意图指标 | 意图分类器微调后 |
+</details>
 
-### 对比模式
-
-当设置 `comparison_mode=True` 时,pipeline 会:
-
-1. **加载基线数据**: 从 `evaluation_baselines` 表读取历史评测结果
-2. **执行当前评测**: 在新模型/配置下运行完整评测
-3. **计算 Delta**: 对比每个指标的相对/绝对变化
-4. **统计显著性检验**: Bootstrap 置信区间 + p-value
-5. **生成报告**: 包含变化百分比和统计显著性分析
-
-### Delta Metrics 示例
-
-```
-| Metric              | Baseline | Current | Delta  | p-value | Status  |
-|---------------------|----------|---------|--------|---------|---------|
-| MRR@5               | 0.723    | 0.789   | +9.1%  | 0.023   | ✅ SIGNIFICANT_IMPROVED |
-| NDCG@5              | 0.681    | 0.712   | +4.5%  | 0.045   | ✅ MARGINAL_IMPROVED |
-| Slot F1 (对话)      | 0.820    | 0.871   | +6.2%  | 0.018   | ✅ IMPROVED |
-| Judge Relevance     | 0.452    | 0.438   | -3.1%  | 0.120   | ➖ NOT_SIGNIFICANT |
-```
-
-## 测试数据格式
-
-> 数据文件在 `.gitignore` 中,作为本地 fixture 管理。仓库内置了示例数据可直接跑通。
-
-### 单轮 Q&A (`data/test_dataset.jsonl`)
-
-意图标签必须与 chatbot 的 `Intent` 枚举一致(全小写):
-
-```json
-{"query": "退款政策是什么?", "intent": "policy", "ground_truth": "7天无理由退款:购买后7天内可申请退款..."}
-{"query": "我要退款,订单号 SO20260617001", "intent": "refund", "ground_truth": "请提供以下信息以处理退款..."}
-{"query": "你好", "intent": "greeting", "ground_truth": "您好!很高兴为您服务..."}
-```
-
-### 意图类型(对齐 rag_chatbot 的 `Intent` 枚举)
-
-| 组 | 意图 | 说明 |
-|----|------|------|
-| Task | `refund` `return` `query_order` `track_shipping` `complaint` | 任务型(需槽位填充) |
-| RAG | `faq` `policy` | 知识问答 |
-| Direct | `chitchat` `greeting` | 直接回复 |
-| Meta | `confirm` `deny` `cancel` `unknown` | 元对话 |
-| Graph | `relationship_query` `global_summary` `entity_lookup` | 图谱查询(需 GRAPH_RAG_ENABLED) |
-
-### 检索标注 (`data/retrieval_labels.json`,JSONL)
-
-`relevant_docs` 的 id 需与 chatbot 实际返回的 `sources` 命名一致才能命中:
-
-```json
-{"query": "如何重置密码?", "intent": "faq", "relevant_docs": ["doc_password_reset_001", "doc_account_settings_002"]}
-```
-
-### 多轮对话 (`data/dialogue_dataset.jsonl`)
-
-每行一个对话 case,支持紧凑的 per-turn 写法。`required_slots` 决定任务完成率,`expect_switch` 标注是否含意图切换:
-
-```json
-{"case_id": "refund_clarify_3turn", "turns": [
-  {"message": "我想退货退款", "intent": "refund", "slots": {}},
-  {"message": "订单号是 SO20260617002", "intent": "refund", "slots": {"order_id": "SO20260617002"}},
-  {"message": "原因是质量问题", "intent": "refund", "slots": {"order_id": "SO20260617002", "reason": "质量问题"}}
-], "required_slots": ["order_id", "reason"], "expect_switch": false}
-```
-
-## 多轮对话评测方法论
-
-采用 PARADISE / MultiWOZ 范式的任务导向对话评测,针对 LangGraph 对话引擎设计:
-
-| 指标 | 定义 | 对应 LangGraph 节点 |
-|------|------|-------------------|
-| 槽位 Precision/Recall/F1 | 最终轮 `filled_slots` vs `required_slots` | `collect_slots` |
-| 平均澄清轮数 | 必需槽全部填满前的轮数(越少越好) | `collect_slots` → `generate_response` |
-| 每轮意图准确率 | 检测意图 vs 标注意图 | `detect_intent` |
-| 意图切换准确率 | 切换轮是否跟随新任务 | `handle_switch` + `state_stack` |
-| 任务完成率 | 末轮必需槽是否填齐 | 端到端 |
-
-## 调度策略
-
-| DAG ID | Schedule | 用途 |
-|--------|----------|------|
-| `rag_evaluation_daily` | `@daily` | 日常监控 |
-| `rag_evaluation_weekly` | `@weekly` | 周度报告 |
-| `rag_evaluation_ft_compare` | None (手动) | 微调对比实验 |
-
-### 触发示例
-
-```bash
-# 全面评测(含多轮对话)
-airflow dags trigger rag_evaluation --conf '{"mode": "full"}'
-
-# 仅评测检索(Embedding 微调后)
-airflow dags trigger rag_evaluation --conf '{"mode": "retrieval_only", "finetune_target": "embedding"}'
-
-# 微调对比
-airflow dags trigger rag_evaluation --conf '{"mode": "full", "baseline_name": "v1.0", "comparison_mode": true}'
-
-# 指定多轮对话数据集
-airflow dags trigger rag_evaluation --conf '{"dialogue_file": "data/dialogue_dataset_v2.jsonl"}'
-```
-
-## 延迟阈值(端到端,按客服 RAG 真实场景校准)
-
-| 指标 | 阈值 | 说明 |
-|------|------|------|
-| 检索 P95 | < 2000ms | 含 hybrid + rerank |
-| 生成 P95 | < 10000ms | 含 LLM 生成 + 可选 GraphRAG |
-| 端到端 P95 | < 12000ms | /api/v1/chat 全程 |
-
-阈值可在 `configs/evaluation_config.yaml` 调整。
-
-## 测试
-
-```bash
-.venv/bin/python -m pytest tests/unit/test_blackbox_eval.py tests/unit/test_dialogue_eval.py -q
-```
-
-覆盖:黑盒契约解析、session/节流、黑盒检索评分、judge 回落、意图归一化、多轮槽位/澄清/意图切换/完成率。26 个单测,无需网络。
-
-## 备注
-
-- **检索评测 vs 直连向量库**:主流路径用 chatbot 返回的 `sources`(测真实检索)。直连 Qdrant 作为可选的"纯向量召回离线基线",默认关闭(`retrieval.vector_db.enabled: false`),且 embedding 须与线上 BGE-M3 一致。
-- **doc_id 对齐**:`retrieval_labels.json` 的 `relevant_docs` 需与 chatbot 实际返回的 `sources` id 命名一致。建议先跑一次拿几条真实 `sources` 校准标注。
-- **限流与批量**:大批量评测受 9 rpm 约束,DAG 任务 timeout 已按此估(检索 1800s / 生成 3600s / 对话 1800s)。若在 chatbot 侧调高限流,同步上调 `CHATBOT_RATE_LIMIT_RPM`。
+<!--
+RECORDING_TODO:
+1. Record demo.gif → docs/assets/demo.gif
+2. Replace placeholder img tag in hero section
+3. Consider adding a Live Demo link (deploy Airflow + expose read-only?)
+-->
